@@ -5,8 +5,15 @@ from message import MessageObj
 import builtins
 from constants import *
 from state_objects import *
+from crypto_utils import *
+from dh_signed_fields import DHSignedFields
 import time
+import logging
 
+NAME = BOB
+
+log = logging.getLogger("werkzeug")
+log.setLevel(logging.ERROR)
 app = Flask(__name__)
 config = load_config()
 
@@ -19,7 +26,7 @@ current_dh = None
 
 
 def send(msg_obj: MessageObj):
-    print(f"[{msg_obj.from_name}] Sending:", msg_obj.text)
+    print(f"[{msg_obj.from_name}] Sending:", msg_obj.body)
     networking_utils.send(msg_obj)
 
 
@@ -31,6 +38,42 @@ def print(*args, **kwargs):
     builtins.print(colored, **kwargs)
 
 
+def populate_dh(data, logging=True):
+    dh = DiffieHellmanState()
+    dh.set_values(data["body"]["p"], data["body"]["g"])
+    dh.generate_keys()
+    dh.set_shared_key(data["body"]["A"])
+    if logging:
+        print(dh)
+    return dh
+
+
+def verify_signature(data, is_demo=False, logging=True):
+    fields = DHSignedFields(
+        name=data["body"]["name"],
+        p=data["body"]["p"],
+        g=data["body"]["g"],
+        A=data["body"]["A"],
+        nonce=bytes.fromhex(data["body"]["nonce"]),
+    )
+
+    message_bytes = fields.to_bytes()
+    sig = bytes.fromhex(data["signature"])
+    if is_demo:
+        result = simple_verify(message_bytes, sig, DEMO_E, DEMO_N)
+    else:
+        # pull public key from CA
+        public_key = None
+        ##### ^ UPDATE
+        result = verify(message_bytes, sig, public_key)
+    if logging:
+        if result:
+            print("Signature is valid")
+        else:
+            print("Signature is invalid rejecting packet")
+    return result
+
+
 def handle_response(data):
     global current_dh
     stage = int(data["stage"])
@@ -40,21 +83,22 @@ def handle_response(data):
         msg_obj = MessageObj("It's 4925", BOB, ALICE, mitm_url, stage + 0.1)
     # both 2 - 5 are simple DH
     elif 2 <= stage < 6:
-        current_dh = DiffieHellmanState()
-        current_dh.set_values(data["text"]["p"], data["text"]["g"])
-        current_dh.generate_keys()
-        current_dh.set_shared_key(data["text"]["A"])
-        print(current_dh)
+        current_dh = populate_dh(data)
         msg_obj = MessageObj(
             current_dh.public_info(), BOB, ALICE, mitm_url, stage + 0.1
         )
+    elif 6 <= stage < 8:
+
+        verify_signature(data, is_demo=True)
+
+        return jsonify({BOB: "Message received"})
     send(msg_obj)
 
 
 @app.route("/receive", methods=["POST"])
 def receive_message():
     data = request.json
-    print(BOB, "Received:", data["text"])
+    print(BOB, "Received:", data["body"])
     handle_response(data)
     return jsonify({BOB: "Message received"})
 

@@ -19,6 +19,10 @@ def _is_probable_prime(n: int, k: int = 15) -> bool:
         d //= 2
         r += 1
 
+    # avoid empty range
+    if n in [2, 3]:
+        return True
+
     # Test k random bases a
     for _ in range(k):
         a = random.randrange(2, n - 2)
@@ -129,9 +133,9 @@ def brute_force_dlp(g, p, A, B):
 
         if a is not None and b is not None:
             break
-        
+
         # timeout
-        if x > 10**7:
+        if x > 10**6.5:
             return None
 
     return a, b

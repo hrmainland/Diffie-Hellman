@@ -1,13 +1,30 @@
 import random
 from diffie_hellman_utils import *
 from constants import *
+from crypto_utils import *
+
+random.seed(SEED)
 
 
 class RSAState:
-    def __init__(self, public_key, private_key, cert=None):
-        self.public_key = public_key
-        self.private_key = private_key
-        self.cert = cert
+    def __init__(self):
+        self.public_key = None
+        self.private_key = None
+        self.cert = None
+        self.n = None
+        self.e = None
+        self.d = None
+
+    def generate_values(self, is_demo=False):
+        if is_demo:
+            n, e, d = get_rsa_constants()
+            self.n = n
+            self.e = e
+            self.d = d
+        else:
+            private_key, public_key = get_rsa_keys()
+            self.private_key = private_key
+            self.public_key = public_key
 
     def public_info(self):
         return {
@@ -30,7 +47,6 @@ class DiffieHellmanState:
         return f"DiffiehellmanState(p={self.p}, g={self.g}, x={self.x}, A={self.A}, K={self.K})"
 
     def generate_values(self, is_weak):
-        random.seed(SEED)
         # Prime
         if is_weak:
             self.p = generate_prime_with_digits(1)

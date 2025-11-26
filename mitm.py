@@ -7,7 +7,11 @@ from diffie_hellman_utils import *
 from state_objects import *
 import builtins
 import time
+import logging
 
+
+log = logging.getLogger("werkzeug")
+log.setLevel(logging.ERROR)
 app = Flask(__name__)
 config = load_config()
 
@@ -22,13 +26,13 @@ bob_dh = None
 
 
 def send(msg_obj: MessageObj):
-    print(f"[MITM] Sending:", msg_obj.text)
+    print(f"[MITM] Sending:", msg_obj.body)
     return networking_utils.send(msg_obj)
 
 
 def print(*args, **kwargs):
-    def red(text):
-        return f"\033[91m{text}\033[0m"
+    def red(body):
+        return f"\033[91m{body}\033[0m"
 
     colored = " ".join(red(str(arg)) for arg in args)
     builtins.print(colored, **kwargs)
@@ -46,22 +50,75 @@ def simple_relay(data):
         raise Exception("Unknown recipient")
 
     msg_obj = MessageObj(
-        data["text"],
+        data["body"],
         data.get("from_name"),
         to_name,
         target_url,
         data.get("stage"),
+        data.get("signature"),
     )
 
     downstream_resp = send(msg_obj)
 
-    return jsonify(
-        {
-            "MITM": "Relayed",
-            "downstream_status": downstream_resp.status_code,
-            "downstream_body": downstream_resp.json(),
-        }
+    return downstream_resp.json()
+
+
+def update_body_and_relay(data):
+
+    to_name = data.get("to_name")
+
+    if to_name == ALICE:
+        target_url = alice_receive_url
+    elif to_name == BOB:
+        target_url = bob_receive_url
+    else:
+        raise Exception("Unknown recipient")
+
+    data["body"]["A"] = 99
+
+    msg_obj = MessageObj(
+        data["body"],
+        data.get("from_name"),
+        to_name,
+        target_url,
+        data.get("stage"),
+        data.get("signature"),
     )
+
+    downstream_resp = send(msg_obj)
+
+    return downstream_resp.json()
+
+
+def respond_dh_with_alice(data):
+    global alice_dh
+    stage = int(data["stage"])
+    alice_dh = DiffieHellmanState()
+    alice_dh.set_values(data["body"]["p"], data["body"]["g"])
+    alice_dh.generate_keys()
+    alice_dh.set_shared_key(data["body"]["A"])
+    print(alice_dh)
+    msg_obj = MessageObj(
+        alice_dh.public_info(), BOB, ALICE, alice_receive_url, stage + 0.1
+    )
+    send(msg_obj)
+
+
+def begin_dh_with_bob(data):
+    global bob_dh
+    stage = int(data["stage"])
+    bob_dh = DiffieHellmanState()
+    bob_dh.generate_values(is_weak=True)
+    bob_dh.generate_keys()
+    print(bob_dh)
+    msg_obj = MessageObj(bob_dh.public_info(), ALICE, BOB, bob_receive_url, stage + 0.1)
+    send(msg_obj)
+
+
+def finish_dh_with_bob(data):
+    global bob_dh
+    bob_dh.set_shared_key(data["body"]["A"])
+    print(bob_dh)
 
 
 @app.route("/receive", methods=["POST"])
@@ -72,7 +129,7 @@ def relay():
 
     data = request.json
     stage = int(data["stage"])
-    print("[MITM] Incoming:", data["text"])
+    print("[MITM] Incoming:", data["body"])
 
     if stage < 3:
         return simple_relay(data)
@@ -80,10 +137,10 @@ def relay():
     elif stage < 5:
         if data["from_name"] == ALICE:
             shared_dh = DiffieHellmanState()
-            shared_dh.set_values(data["text"]["p"], data["text"]["g"])
-            shared_dh.set_A(data["text"]["A"])
+            shared_dh.set_values(data["body"]["p"], data["body"]["g"])
+            shared_dh.set_A(data["body"]["A"])
         else:
-            shared_dh.set_B(data["text"]["A"])
+            shared_dh.set_B(data["body"]["A"])
             print("Generating...")
             secrets = brute_force_dlp(
                 shared_dh.g, shared_dh.p, shared_dh.A, shared_dh.B
@@ -97,26 +154,19 @@ def relay():
 
     elif stage == 5:
         if data["from_name"] == ALICE:
-            alice_dh = DiffieHellmanState()
-            alice_dh.set_values(data["text"]["p"], data["text"]["g"])
-            alice_dh.generate_keys()
-            alice_dh.set_shared_key(data["text"]["A"])
-            print(alice_dh)
-            msg_obj = MessageObj(
-                alice_dh.public_info(), BOB, ALICE, alice_receive_url, stage + 0.1
-            )
-            send(msg_obj)
-            return jsonify(
-                {
-                    "MITM": "Relayed",
-                    "downstream_status": 200,
-                }
-            )
+            respond_dh_with_alice(data)
+            begin_dh_with_bob(data)
+            return jsonify({BOB: "Message received"})
 
         else:
-            bob_dh = DiffieHellmanState()
-            bob_dh.set_values(data["text"]["p"], data["text"]["g"])
-            bob_dh.set_A(data["text"]["A"])
+            finish_dh_with_bob(data)
+            return jsonify({ALICE: "Message received"})
+
+    elif stage == 6:
+        return simple_relay(data)
+
+    elif stage == 7:
+        return update_body_and_relay(data)
 
 
 if __name__ == "__main__":
