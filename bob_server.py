@@ -7,7 +7,13 @@ from constants import *
 from state_objects import *
 from crypto_utils import *
 from signed_fields import *
-from server_utils import populate_rsa, build_dh_fields, get_signature, request_certificate_from_ca
+from server_utils import (
+    populate_rsa,
+    build_dh_fields,
+    get_signature,
+    request_certificate_from_ca,
+    log_outgoing_message,
+)
 import logging
 from ca_server import ca_public_key
 
@@ -28,9 +34,7 @@ current_rsa = None
 
 
 def send(msg_obj: MessageObj):
-    print(f"[{msg_obj.from_name}] Sending:", msg_obj.body)
-    if msg_obj.signature is not None:
-        print(f"[{msg_obj.from_name}] Signature:", msg_obj.signature[:5] + "...")
+    log_outgoing_message(msg_obj, print)
     return networking_utils.send(msg_obj)
 
 

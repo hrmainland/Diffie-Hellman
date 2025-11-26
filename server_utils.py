@@ -9,6 +9,28 @@ from message import MessageObj
 import networking_utils
 
 
+def log_outgoing_message(msg_obj: MessageObj, printer):
+    """Pretty-print outgoing message contents using the provided printer."""
+
+    def preview(obj):
+        text = str(obj)
+        return text if len(text) <= 15 else text[:15] + "..."
+
+    printer(f"\n[{msg_obj.from_name}] Sending:")
+    for key, value in msg_obj.__dict__.items():
+        if isinstance(value, dict):
+            printer(key + ":")
+            for subkey, subvalue in value.items():
+                printer(f"   {subkey}: {preview(subvalue)}")
+        else:
+            if key in ("to_url", "stage", "method"):
+                continue
+            if (key == "cert" and not value) or (key == "signature" and not value):
+                continue
+            printer(f"{key}: {preview(value)}")
+    printer("*" * 40)
+
+
 def populate_rsa(is_demo=False):
     """Generate RSA key pair for signing."""
     rsa = RSAState()

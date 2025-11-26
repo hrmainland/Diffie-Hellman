@@ -12,6 +12,7 @@ from server_utils import (
     build_dh_fields,
     get_signature,
     request_certificate_from_ca,
+    log_outgoing_message,
 )
 from ca_server import ca_public_key
 import logging
@@ -38,15 +39,8 @@ current_rsa = None
 
 
 def send(msg_obj: MessageObj):
-    print(f"[{msg_obj.from_name}] Sending:")
-    for key, value in msg_obj.__dict__.items():
-        if isinstance(value, dict):
-            print(key)
-            for subkey, subvalue in value.items():
-                print(f"\t{subkey}: {subvalue}")
-        else:
-            print(f"{key}: {value}")
-
+    # Log outgoing message fields before forwarding to the networking layer.
+    log_outgoing_message(msg_obj, print)
     return networking_utils.send(msg_obj)
 
 
@@ -67,7 +61,7 @@ def populate_dh(is_weak_dh, logging=True):
     return dh
 
 
-def send_authenticated_dh_message(dh, rsa_state, stage, dest_url):
+def build_authenticated_dh_message(dh_state, rsa_state, stage, dest_url):
     """
     Build and send initial DH message with signature and certificate.
 
@@ -82,7 +76,7 @@ def send_authenticated_dh_message(dh, rsa_state, stage, dest_url):
     """
     # Generate DH signature
     nonce = generate_nonce()
-    dh_fields = build_dh_fields(NAME, dh, nonce)
+    dh_fields = build_dh_fields(NAME, dh_state, nonce)
     message_bytes = dh_fields.to_bytes()
     dh_sig = get_signature(message_bytes, rsa_state)
 
@@ -97,7 +91,7 @@ def send_authenticated_dh_message(dh, rsa_state, stage, dest_url):
         cert=rsa_state.cert,
     )
 
-    send(msg_obj)
+    return msg_obj
 
 
 def send_first_msg(stage):
@@ -152,11 +146,10 @@ def send_first_msg(stage):
         )
 
         if current_rsa.cert is None:
-            return
+            raise Exception("Failed to obtain certificate from CA")
 
         # Step 3: Send authenticated DH message to Bob
-        send_authenticated_dh_message(current_dh, current_rsa, stage, mitm_url)
-        return
+        msg_obj = build_authenticated_dh_message(current_dh, current_rsa, stage, mitm_url)
 
     send(msg_obj)
 
@@ -167,9 +160,7 @@ def handle_response(data):
     """
     global current_dh
     stage = float(data["stage"])
-    if stage == 0:
-        return
-    elif 1 <= stage < 2:
+    if 0 <= stage < 2:
         return
     # stages 2-5 all DH
     elif 2 <= stage < 6:
