@@ -7,8 +7,9 @@ from constants import *
 from state_objects import *
 from crypto_utils import *
 from signed_fields import *
-import time
+from server_utils import populate_rsa, build_dh_fields, get_signature, request_certificate_from_ca
 import logging
+from ca_server import ca_public_key
 
 NAME = BOB
 
@@ -23,11 +24,14 @@ mitm_url = config[MITM]["base_url"] + "/receive"
 ca_url = config[CA]["base_url"] + "/request"
 
 current_dh = None
+current_rsa = None
 
 
 def send(msg_obj: MessageObj):
     print(f"[{msg_obj.from_name}] Sending:", msg_obj.body)
-    networking_utils.send(msg_obj)
+    if msg_obj.signature is not None:
+        print(f"[{msg_obj.from_name}] Signature:", msg_obj.signature[:5] + "...")
+    return networking_utils.send(msg_obj)
 
 
 def print(*args, **kwargs):
@@ -48,32 +52,56 @@ def populate_dh(data, logging=True):
     return dh
 
 
-def verify_signature(data, is_demo=False, logging=True):
-    fields = DHSignedFields(
-        name=data["body"]["name"],
-        p=data["body"]["p"],
-        g=data["body"]["g"],
-        A=data["body"]["A"],
-        nonce=bytes.fromhex(data["body"]["nonce"]),
+def verify_and_extract_dh(data):
+    """
+    Verify incoming DH message signature and certificate, then extract DH values.
+
+    Args:
+        data: Message data from Alice
+
+    Returns:
+        DiffieHellmanState if valid, None if verification fails
+    """
+    # Verify Alice's signature and certificate
+    sig_valid = verify_dh_signature(data, ca_public_key)
+    if not sig_valid:
+        print("Rejecting message due to invalid signature or certificate")
+        return None
+
+    # Extract Alice's DH values and compute shared key
+    return populate_dh(data)
+
+
+def send_authenticated_dh_response(dh, rsa_state, stage):
+    """
+    Build and send DH response with signature and certificate.
+
+    Args:
+        dh: DiffieHellmanState with computed values
+        rsa_state: RSAState with certificate
+        stage: Current protocol stage
+
+    Returns:
+        None
+    """
+    # Generate DH signature
+    nonce = generate_nonce()
+    dh_fields = build_dh_fields(NAME, dh, nonce)
+    message_bytes = dh_fields.to_bytes()
+    dh_sig = get_signature(message_bytes, rsa_state)
+
+    # Send response to Alice with Bob's DH values, signature, and certificate
+    msg_obj = MessageObj(
+        dh_fields.serializable(),
+        BOB,
+        ALICE,
+        mitm_url,
+        stage + 0.1,
+        dh_sig.hex(),
+        cert=rsa_state.cert,
     )
 
-    message_bytes = fields.to_bytes()
-    sig = bytes.fromhex(data["signature"])
-    if is_demo:
-        result = simple_verify(message_bytes, sig, DEMO_E, DEMO_N)
-    else:
-        # pull public key from CA
-        public_pem = data.get("cert").get("body").get("public_key")
-        print()
-        print(public_pem[50] + "..." + public_pem[-50:])
-        public_key = public_key_deserialize_from_pem(public_pem)
-        result = verify(message_bytes, sig, public_key)
-    if logging:
-        if result:
-            print("Signature is valid")
-        else:
-            print("Signature is invalid rejecting packet")
-    return result
+    send(msg_obj)
 
 
 def handle_response(data):
@@ -91,11 +119,35 @@ def handle_response(data):
         )
     elif 6 <= stage < 8:
 
-        verify_signature(data, is_demo=True)
+        verify_dh_signature(data, ca_public_key, is_demo=True)
 
         return jsonify({BOB: "Message received"})
     elif stage == 8:
-        verify_signature(data)
+        global current_rsa
+
+        # Step 1: Verify Alice's message and extract DH values
+        current_dh = verify_and_extract_dh(data)
+        if current_dh is None:
+            return jsonify({BOB: "Message rejected"})
+
+        # Step 2: Generate RSA key pair and obtain certificate from CA
+        current_rsa = populate_rsa()
+        print(f"Generated RSA key pair for {NAME}")
+
+        current_rsa.cert = request_certificate_from_ca(
+            name=NAME,
+            rsa_state=current_rsa,
+            ca_url=ca_url,
+            stage=stage,
+            from_name=BOB
+        )
+
+        if current_rsa.cert is None:
+            return jsonify({BOB: "Certificate request failed"})
+
+        # Step 3: Send authenticated DH response to Alice
+        send_authenticated_dh_response(current_dh, current_rsa, stage)
+
         return jsonify({BOB: "Message received"})
     send(msg_obj)
 

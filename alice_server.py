@@ -7,7 +7,8 @@ from signed_fields import *
 from constants import *
 from state_objects import *
 from crypto_utils import *
-import time
+from server_utils import populate_rsa, build_dh_fields, get_signature, request_certificate_from_ca
+from ca_server import ca_public_key
 import logging
 
 NAME = ALICE
@@ -52,31 +53,39 @@ def populate_dh(is_weak_dh, logging=True):
     return dh
 
 
-def populate_rsa(is_demo=False):
-    rsa = RSAState()
-    rsa.generate_values(is_demo)
-    return rsa
+def send_authenticated_dh_message(dh, rsa_state, stage, dest_url):
+    """
+    Build and send initial DH message with signature and certificate.
 
+    Args:
+        dh: DiffieHellmanState with computed values
+        rsa_state: RSAState with certificate
+        stage: Current protocol stage
+        dest_url: Destination URL (typically MITM or Bob)
 
-def build_dh_fields(nonce):
-    global current_dh
-    return DHSignedFields(
-        name=NAME,
-        p=current_dh.p,
-        g=current_dh.g,
-        A=current_dh.A,
-        nonce=nonce,
+    Returns:
+        None
+    """
+    # Generate DH signature
+    nonce = generate_nonce()
+    dh_fields = build_dh_fields(NAME, dh, nonce)
+    message_bytes = dh_fields.to_bytes()
+    dh_sig = get_signature(message_bytes, rsa_state)
+
+    # Send message with DH values, signature, and certificate
+    msg_obj = MessageObj(
+        dh_fields.serializable(),
+        ALICE,
+        BOB,
+        dest_url,
+        stage,
+        dh_sig.hex(),
+        cert=rsa_state.cert,
     )
 
+    send(msg_obj)
 
-def get_signature(message_bytes):
-    global current_rsa
-    if current_rsa.private_key is not None:
-        return sign(message_bytes, current_rsa.private_key)
-    elif current_rsa.n is not None:
-        return simple_sign(message_bytes, current_rsa.d, current_rsa.n)
-    else:
-        raise Exception("No means to sign message - missing keys and constants")
+
 
 
 def send_first_msg(stage):
@@ -104,9 +113,9 @@ def send_first_msg(stage):
         # generate signature
         current_rsa = populate_rsa(is_demo=True)
         nonce = generate_nonce()
-        dh_fields = build_dh_fields(nonce)
+        dh_fields = build_dh_fields(NAME, current_dh, nonce)
         message_bytes = dh_fields.to_bytes()
-        sig = get_signature(message_bytes)
+        sig = get_signature(message_bytes, current_rsa)
 
         msg_obj = MessageObj(
             dh_fields.serializable(), ALICE, BOB, mitm_url, stage, sig.hex()
@@ -117,48 +126,25 @@ def send_first_msg(stage):
             print(bits)
 
     elif stage == 8:
-        # generate DH values
+        # Step 1: Generate DH values
         current_dh = populate_dh(is_weak_dh)
 
-        # generate signature
+        # Step 2: Generate RSA key pair and obtain certificate from CA
         current_rsa = populate_rsa()
-        nonce = generate_nonce()
-        dh_fields = build_dh_fields(nonce)
-        message_bytes = dh_fields.to_bytes()
-        dh_sig = get_signature(message_bytes)
-
-        alice_pub_pem = public_key_pem_serialize(current_rsa.public_key)
-
-        csr_fields = CSRSignedFields(name="Alice", public_key_pem=alice_pub_pem)
-        csr_bytes = csr_fields.to_bytes()
-
-        csr_sig = get_signature(csr_bytes)
-
-        msg_obj = MessageObj(
-            csr_fields.serializable(),
-            ALICE,
-            CA,
-            ca_url,
-            stage,
-            csr_sig.hex(),
+        current_rsa.cert = request_certificate_from_ca(
+            name=NAME,
+            rsa_state=current_rsa,
+            ca_url=ca_url,
+            stage=stage,
+            from_name=ALICE
         )
 
-        response = send(msg_obj)
-        if response.status_code != 200:
-            print("Failed to request certificate from CA")
-            print(response.json())
+        if current_rsa.cert is None:
             return
-        current_rsa.cert = response.json()
 
-        msg_obj = MessageObj(
-            dh_fields.serializable(),
-            ALICE,
-            BOB,
-            mitm_url,
-            stage,
-            dh_sig.hex(),
-            cert=current_rsa.cert,
-        )
+        # Step 3: Send authenticated DH message to Bob
+        send_authenticated_dh_message(current_dh, current_rsa, stage, mitm_url)
+        return
 
     send(msg_obj)
 
@@ -168,7 +154,7 @@ def handle_response(data):
     Handles responses from Bob and MITM
     """
     global current_dh
-    stage = int(data["stage"])
+    stage = float(data["stage"])
     if stage == 0:
         return
     elif 1 <= stage < 2:
@@ -177,6 +163,22 @@ def handle_response(data):
     elif 2 <= stage < 6:
         current_dh.set_shared_key(data["body"]["A"])
         print(current_dh)
+        return
+    # stages 6-7 demo signatures
+    elif 6 <= stage < 8:
+        return
+    # stage 8.1 - Bob's response with certificate
+    elif 8 <= stage < 9:
+        # Verify Bob's signature and certificate
+        sig_valid = verify_dh_signature(data, ca_public_key)
+        if not sig_valid:
+            print("Rejecting Bob's message due to invalid signature or certificate")
+            return
+
+        # If verification passes, complete DH key exchange
+        current_dh.set_shared_key(data["body"]["A"])
+        print(current_dh)
+        print("Authenticated key exchange completed successfully!")
         return
 
 

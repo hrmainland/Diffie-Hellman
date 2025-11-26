@@ -169,7 +169,7 @@ def relay():
     elif stage == 7:
         return update_body_and_relay(data)
 
-    elif stage == 8:
+    elif 8 <= stage < 9:
         return simple_relay(data)
 
 
