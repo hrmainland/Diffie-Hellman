@@ -1,6 +1,6 @@
 import secrets
 import hashlib
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric import rsa
 from constants import *
@@ -91,3 +91,14 @@ def verify(message_bytes, signature, public_key):
         padding.PKCS1v15(),
         hashes.SHA256(),
     )
+
+
+def public_key_pem_serialize(public_key):
+    return public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+
+
+def public_key_deserialize_from_pem(pem):
+    return serialization.load_pem_public_key(pem.encode("utf-8"))

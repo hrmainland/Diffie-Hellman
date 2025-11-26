@@ -15,6 +15,9 @@ class RSAState:
         self.e = None
         self.d = None
 
+    def __str__(self):
+        return f"RSAState(public_key={self.public_key}, private_key={self.private_key}, cert={self.cert}, n={self.n}, e={self.e}, d={self.d})"
+
     def generate_values(self, is_demo=False):
         if is_demo:
             n, e, d = get_rsa_constants()

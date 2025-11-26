@@ -56,6 +56,7 @@ def simple_relay(data):
         target_url,
         data.get("stage"),
         data.get("signature"),
+        data.get("cert"),
     )
 
     downstream_resp = send(msg_obj)
@@ -167,6 +168,9 @@ def relay():
 
     elif stage == 7:
         return update_body_and_relay(data)
+
+    elif stage == 8:
+        return simple_relay(data)
 
 
 if __name__ == "__main__":

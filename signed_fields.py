@@ -30,3 +30,22 @@ class DHSignedFields:
             ("A", self.A),
             ("nonce", self.nonce),
         )
+
+
+
+@dataclass
+class CSRSignedFields:
+    name: str
+    public_key_pem: str
+
+    def serializable(self):
+        return {
+            "name": self.name,
+            "public_key": self.public_key_pem,
+        }
+
+    def to_bytes(self) -> bytes:
+        return pack_for_signing(
+            ("name", self.name),
+            ("public_key", self.public_key_pem),
+        )

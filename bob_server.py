@@ -6,7 +6,7 @@ import builtins
 from constants import *
 from state_objects import *
 from crypto_utils import *
-from dh_signed_fields import DHSignedFields
+from signed_fields import *
 import time
 import logging
 
@@ -20,7 +20,7 @@ config = load_config()
 bob_port = config[BOB]["base_url"].split(":")[-1]
 alice_url = config[ALICE]["base_url"] + "/receive"
 mitm_url = config[MITM]["base_url"] + "/receive"
-ca_url = config["ca"]["base_url"] + "/request"
+ca_url = config[CA]["base_url"] + "/request"
 
 current_dh = None
 
@@ -63,8 +63,10 @@ def verify_signature(data, is_demo=False, logging=True):
         result = simple_verify(message_bytes, sig, DEMO_E, DEMO_N)
     else:
         # pull public key from CA
-        public_key = None
-        ##### ^ UPDATE
+        public_pem = data.get("cert").get("body").get("public_key")
+        print()
+        print(public_pem[50] + "..." + public_pem[-50:])
+        public_key = public_key_deserialize_from_pem(public_pem)
         result = verify(message_bytes, sig, public_key)
     if logging:
         if result:
@@ -91,6 +93,9 @@ def handle_response(data):
 
         verify_signature(data, is_demo=True)
 
+        return jsonify({BOB: "Message received"})
+    elif stage == 8:
+        verify_signature(data)
         return jsonify({BOB: "Message received"})
     send(msg_obj)
 

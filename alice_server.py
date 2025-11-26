@@ -2,8 +2,8 @@ from flask import Flask, request, jsonify
 from config_utils import load_config
 import networking_utils
 from message import MessageObj
-from dh_signed_fields import DHSignedFields
 import builtins
+from signed_fields import *
 from constants import *
 from state_objects import *
 from crypto_utils import *
@@ -21,7 +21,7 @@ config = load_config()
 alice_port = config[ALICE]["base_url"].split(":")[-1]
 bob_url = config[BOB]["base_url"] + "/receive"
 mitm_url = config[MITM]["base_url"] + "/receive"
-ca_url = config["ca"]["base_url"] + "/request"
+ca_url = config[CA]["base_url"] + "/request"
 
 current_dh = None
 current_rsa = None
@@ -32,7 +32,7 @@ def send(msg_obj: MessageObj):
     if msg_obj.signature is not None:
         print(f"[{msg_obj.from_name}] Signature:", msg_obj.signature[:5] + "...")
 
-    networking_utils.send(msg_obj)
+    return networking_utils.send(msg_obj)
 
 
 def print(*args, **kwargs):
@@ -70,6 +70,7 @@ def build_dh_fields(nonce):
 
 
 def get_signature(message_bytes):
+    global current_rsa
     if current_rsa.private_key is not None:
         return sign(message_bytes, current_rsa.private_key)
     elif current_rsa.n is not None:
@@ -114,6 +115,50 @@ def send_first_msg(stage):
         if VERBOSE:
             bits = "".join(f"{b:08b}" for b in message_bytes)
             print(bits)
+
+    elif stage == 8:
+        # generate DH values
+        current_dh = populate_dh(is_weak_dh)
+
+        # generate signature
+        current_rsa = populate_rsa()
+        nonce = generate_nonce()
+        dh_fields = build_dh_fields(nonce)
+        message_bytes = dh_fields.to_bytes()
+        dh_sig = get_signature(message_bytes)
+
+        alice_pub_pem = public_key_pem_serialize(current_rsa.public_key)
+
+        csr_fields = CSRSignedFields(name="Alice", public_key_pem=alice_pub_pem)
+        csr_bytes = csr_fields.to_bytes()
+
+        csr_sig = get_signature(csr_bytes)
+
+        msg_obj = MessageObj(
+            csr_fields.serializable(),
+            ALICE,
+            CA,
+            ca_url,
+            stage,
+            csr_sig.hex(),
+        )
+
+        response = send(msg_obj)
+        if response.status_code != 200:
+            print("Failed to request certificate from CA")
+            print(response.json())
+            return
+        current_rsa.cert = response.json()
+
+        msg_obj = MessageObj(
+            dh_fields.serializable(),
+            ALICE,
+            BOB,
+            mitm_url,
+            stage,
+            dh_sig.hex(),
+            cert=current_rsa.cert,
+        )
 
     send(msg_obj)
 
