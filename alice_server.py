@@ -7,31 +7,45 @@ from signed_fields import *
 from constants import *
 from state_objects import *
 from crypto_utils import *
-from server_utils import populate_rsa, build_dh_fields, get_signature, request_certificate_from_ca
+from server_utils import (
+    populate_rsa,
+    build_dh_fields,
+    get_signature,
+    request_certificate_from_ca,
+)
 from ca_server import ca_public_key
 import logging
 
 NAME = ALICE
 VERBOSE = False
 
+# Suppress default logging
 log = logging.getLogger("werkzeug")
 log.setLevel(logging.ERROR)
+
 app = Flask(__name__)
 config = load_config()
 
+# Define server ports
 alice_port = config[ALICE]["base_url"].split(":")[-1]
 bob_url = config[BOB]["base_url"] + "/receive"
 mitm_url = config[MITM]["base_url"] + "/receive"
 ca_url = config[CA]["base_url"] + "/request"
 
+# global variables imitating databases/persistent state on real servers
 current_dh = None
 current_rsa = None
 
 
 def send(msg_obj: MessageObj):
-    print(f"[{msg_obj.from_name}] Sending:", msg_obj.body)
-    if msg_obj.signature is not None:
-        print(f"[{msg_obj.from_name}] Signature:", msg_obj.signature[:5] + "...")
+    print(f"[{msg_obj.from_name}] Sending:")
+    for key, value in msg_obj.__dict__.items():
+        if isinstance(value, dict):
+            print(key)
+            for subkey, subvalue in value.items():
+                print(f"\t{subkey}: {subvalue}")
+        else:
+            print(f"{key}: {value}")
 
     return networking_utils.send(msg_obj)
 
@@ -86,8 +100,6 @@ def send_authenticated_dh_message(dh, rsa_state, stage, dest_url):
     send(msg_obj)
 
 
-
-
 def send_first_msg(stage):
     global current_dh
     global current_rsa
@@ -136,7 +148,7 @@ def send_first_msg(stage):
             rsa_state=current_rsa,
             ca_url=ca_url,
             stage=stage,
-            from_name=ALICE
+            from_name=ALICE,
         )
 
         if current_rsa.cert is None:
