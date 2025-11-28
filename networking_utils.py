@@ -17,7 +17,7 @@ def send(msg_obj: MessageObj):
     if msg_obj.method == "POST":
         payload = msg_obj.__dict__
         try:
-            response = requests.post(msg_obj.to_url, json=payload, timeout=5)
+            response = requests.post(msg_obj.to_url, json=payload, timeout=10)
             return response
         except requests.exceptions.Timeout:
             return None

@@ -1,14 +1,24 @@
+"""
+Driver code for the project.
+Accepts a stage number as an argument, defaults to 0 if not provided.
+Sends the initial message to the /begin endpoint of the Alice server.
+"""
+
 import requests
-import json
 import sys
 
 args = sys.argv[1:]
 
 
 def begin(stage):
+    """Sends the initial message to the /begin endpoint of the Alice server.
+
+    Args:
+        stage (str): the stage to execute
+    """
     url = "http://127.0.0.1:5001/begin"
     payload = {"stage": stage}
-    response = requests.post(url, json=payload)
+    requests.post(url, json=payload)
 
 
 if __name__ == "__main__":

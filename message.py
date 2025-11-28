@@ -1,3 +1,8 @@
+"""
+Simple message object class that acts as a container for message data.
+Ensures that all message data is stored in the same format.
+"""
+
 class MessageObj:
     def __init__(
         self,

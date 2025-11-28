@@ -1,3 +1,10 @@
+"""Simple demo Certificate Authority (CA) server.
+
+This Flask app exposes a single endpoint that accepts a Certificate
+Signing Request (CSR), verifies proof-of-possession of the private key,
+and returns a signed certificate if the CSR is valid.
+"""
+
 from flask import Flask, request, jsonify
 from config_utils import load_config
 from signed_fields import CSRSignedFields
@@ -12,17 +19,12 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 app = Flask(__name__)
 config = load_config()
 
+# Endpoints that Alice and Bob will use when sending messages
 alice_receive_url = config[ALICE]["base_url"] + "/receive"
 bob_receive_url = config[BOB]["base_url"] + "/receive"
 
+# Port that the CA server will listen on
 ca_port = int(config[CA]["base_url"].split(":")[-1])
-
-# # TODO: Replace with hardcoded CA key pair
-# ca_private_key = rsa.generate_private_key(
-#     public_exponent=65537,
-#     key_size=2048,
-# )
-# ca_public_key = ca_private_key.public_key()
 
 CA_PRIVATE_KEY_PEM = """-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCOYQUf+K7AiYwX
@@ -65,7 +67,7 @@ zQIDAQAB
 -----END PUBLIC KEY-----
 """
 
-# load the CA keys from PEM format
+# Load the CA keys from their PEM-encoded representations
 ca_private_key = serialization.load_pem_private_key(
     CA_PRIVATE_KEY_PEM.encode("utf-8"), password=None
 )
@@ -74,6 +76,23 @@ ca_public_key = public_key_deserialize_from_pem(CA_PUBLIC_KEY_PEM)
 
 @app.route("/request", methods=["POST"])
 def handle_csr():
+    """Handle an incoming Certificate Signing Request (CSR).
+
+    Expects a JSON payload with:
+      - "body": a dict containing "name" and "public_key" (PEM string)
+      - "signature": hex-encoded signature over the CSR fields
+
+    Steps:
+      1. Validate the shape of the request.
+      2. Deserialize the requester public key from the provided PEM.
+      3. Verify proof-of-possession by checking the signature over the CSR.
+      4. If valid, build a certificate body and sign it with the CA's private key.
+      5. Return the certificate as JSON.
+
+    Returns:
+        A Flask `jsonify` response containing the signed certificate on success,
+        or an error message with an appropriate HTTP status code on failure.
+    """
     data = request.json
 
     body = data.get("body")
@@ -88,6 +107,7 @@ def handle_csr():
         print("CSR body missing name/public_key")
         return jsonify({"error": "CSR body missing name/public_key"}), 400
 
+    # Wrap the CSR fields in a typed object that knows how to serialize itself
     csr_fields = CSRSignedFields(
         name=name,
         public_key_pem=pub_pem,
@@ -96,12 +116,13 @@ def handle_csr():
     csr_bytes = csr_fields.to_bytes()
 
     try:
-        # revert public key from pem format
+        # Recover the requester's public key object from the PEM string
         requester_pub = public_key_deserialize_from_pem(pub_pem)
     except Exception:
         return jsonify({"error": "Invalid public key in CSR"}), 400
 
     try:
+        # Verify that the requester actually holds the private key
         requester_pub.verify(
             bytes.fromhex(sig_hex),
             csr_bytes,
@@ -112,12 +133,14 @@ def handle_csr():
         print("Proof-of-possession failed")
         return jsonify({"error": "Proof-of-possession failed"}), 400
 
+    # Construct the certificate body that will be signed by the CA
     cert_body = {
         "name": name,
         "public_key": pub_pem,
         "issuer": "Demo CA",
     }
 
+    # Ensure a consistent field ordering for signing
     cert_body_bytes = pack_for_signing(
         ("name", cert_body["name"]),
         ("public_key", cert_body["public_key"]),
@@ -140,4 +163,5 @@ def handle_csr():
 
 
 if __name__ == "__main__":
+    # Run the CA on the configured port; debug=True is fine for this demo setup
     app.run(port=ca_port, debug=True)

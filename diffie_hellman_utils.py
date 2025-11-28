@@ -1,3 +1,16 @@
+"""
+Utility functions for generating demo-sized primes, finding primitive roots,
+and performing small discrete-logarithm experiments.
+
+This module includes:
+- A Miller–Rabin probabilistic primality test.
+- Helpers for generating primes with a minimum number of digits.
+- A simple trial-division factorisation routine.
+- A primitive-root finder for primes.
+- A brute-force discrete log solver.
+
+"""
+
 import random
 from math import isqrt
 from constants import *
@@ -6,20 +19,25 @@ random.seed(SEED)
 
 
 def _is_probable_prime(n: int, k: int = 15) -> bool:
-    """
-    Miller–Rabin probabilistic primality test.
+    """Return True if n is probably prime using the Miller–Rabin test.
+
+    Args:
+        n: Integer to test.
+        k: Number of random bases to try (more → lower error probability).
+
+    This is a probabilistic test but is more than good enough for demo-sized primes.
     """
     if n < 2:
         return False
 
-    # Write n-1 as d * 2^r with d odd
+    # Write n - 1 as d * 2^r with d odd
     r = 0
     d = n - 1
     while d % 2 == 0:
         d //= 2
         r += 1
 
-    # avoid empty range
+    # Handle small primes explicitly so ranges below do not break
     if n in [2, 3]:
         return True
 
@@ -34,20 +52,17 @@ def _is_probable_prime(n: int, k: int = 15) -> bool:
             if x == n - 1:
                 break
         else:
-            # None of the squarings made it n-1 it's composite
+            # None of the squarings hit n - 1 → definitely composite
             return False
 
-    #  It's probably prime
     return True
 
 
 def generate_prime_with_digits(num_digits: int) -> int:
-    """
-    Generate a random prime with AT LEAST `num_digits` decimal digits.
+    """Generate a random probable prime with at least `num_digits` decimal digits.
 
-    - We pick a random odd number in [10^(d-1), 10^d - 1] and test it.
-    - Keep trying until we hit a probable prime.
-    - This is fine for demo sized primes (e.g. 8–30 digits).
+    The function samples random odd integers in the target range and runs
+    `_is_probable_prime` until it finds one. This is fine for small demo primes.
     """
     if num_digits < 1:
         raise ValueError("num_digits must be >= 1")
@@ -56,7 +71,7 @@ def generate_prime_with_digits(num_digits: int) -> int:
     upper = 10**num_digits - 1
 
     while True:
-        # pick a random odd candidate in [lower, upper]
+        # Pick a random candidate in [lower, upper] and nudge it to be odd
         candidate = random.randrange(lower, upper)
         if candidate % 2 == 0 or candidate % 5 == 0:
             candidate += 1
@@ -66,17 +81,19 @@ def generate_prime_with_digits(num_digits: int) -> int:
 
 
 def _prime_factors(n: int) -> set[int]:
-    """
-    Very simple trial-division factorisation.
-    Good enough for factoring p-1 where p is not astronomically large.
+    """Return the set of prime factors of n using simple trial division.
+
+    This is intentionally naive but is enough for factoring p - 1
+    when p is not enormous.
     """
     factors = set()
-    # factor out 2s
+
+    # Factor out 2s first
     while n % 2 == 0:
         factors.add(2)
         n //= 2
 
-    # factor odd numbers
+    # Then factor odd numbers up to sqrt(n)
     f = 3
     limit = isqrt(n) + 1
     while f <= limit and n > 1:
@@ -93,12 +110,11 @@ def _prime_factors(n: int) -> set[int]:
 
 
 def smallest_primitive_root(p: int) -> int:
-    """
-    Find the smallest primitive root modulo a prime p.
+    """Find the smallest primitive root modulo a prime p.
 
-    A number g is a primitive root mod p if its powers generate all
-    non-zero residues modulo p; equivalently, for every prime factor q
-    of (p-1), we have g^((p-1)/q) != 1 (mod p).
+    A number g is a primitive root mod p if its powers generate all non-zero
+    residues modulo p. Equivalently, for every prime factor q of (p - 1),
+    g^((p - 1) / q) must not be 1 (mod p).
     """
     if p < 3:
         raise ValueError("p must be an odd prime >= 3")
@@ -106,20 +122,29 @@ def smallest_primitive_root(p: int) -> int:
     phi = p - 1
     factors = _prime_factors(phi)
 
-    # Try candidates g = 2,3,4,... until we find a primitive root
+    # Try candidates g = 2, 3, 4, ... until we find a primitive root
     for g in range(2, p):
         for q in factors:
-            # if g^((p-1)/q) ≡ 1 (mod p) for some q, then g is NOT primitive
+            # If g^((p - 1) / q) ≡ 1 (mod p) for some q, then g is not primitive
             if pow(g, phi // q, p) == 1:
                 break
         else:
-            # no factor q made it 1 → this g is a primitive root
+            # Passed all factor checks → g is a primitive root
             return g
 
     raise RuntimeError("No primitive root found – this should not happen for prime p.")
 
 
 def brute_force_dlp(g, p, A, B):
+    """Brute-force the discrete logs for A and B base g modulo p.
+
+    Searches for exponents a and b such that:
+        A ≡ g^a (mod p)
+        B ≡ g^b (mod p)
+
+    This is only intended for very small p; the loop includes a crude
+    cutoff to avoid running forever.
+    """
     a = None
     b = None
 
@@ -134,7 +159,7 @@ def brute_force_dlp(g, p, A, B):
         if a is not None and b is not None:
             break
 
-        # timeout
+        # Give up if the search gets unreasonably large for a demo
         if x > 10**6.5:
             return None
 

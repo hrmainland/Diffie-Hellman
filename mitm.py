@@ -1,3 +1,13 @@
+"""MITM Flask server for the secure communication demo.
+
+This server sits between Alice and Bob and can:
+- Transparently relay messages.
+- Tamper with Diffie–Hellman values.
+- Perform a brute-force DLP attack on weak DH parameters.
+It helps illustrate how a man-in-the-middle can interfere with or break
+insecure protocols.
+"""
+
 from flask import Flask, request, jsonify
 from config_utils import load_config
 import networking_utils
@@ -11,16 +21,20 @@ import time
 import logging
 
 
+# Suppress default werkzeug request logging so our own logger is clearer.
 log = logging.getLogger("werkzeug")
 log.setLevel(logging.ERROR)
 app = Flask(__name__)
 config = load_config()
 
+# URLs for forwarding messages on to Alice and Bob.
 alice_receive_url = config[ALICE]["base_url"] + "/receive"
 bob_receive_url = config[BOB]["base_url"] + "/receive"
 
+# MITM port is taken from the configured base URL.
 mitm_port = int(config[MITM]["base_url"].split(":")[-1])
 
+# Global DH state used for attack and relaying.
 shared_dh = None
 alice_dh = None
 bob_dh = None
@@ -29,6 +43,7 @@ logger = Logger(MITM, RED)
 
 
 def send(msg_obj: MessageObj):
+    """Send a message via the networking layer and log the attempt."""
     logger.log_outgoing_message(msg_obj)
     response = networking_utils.send(msg_obj)
     if response is None:
@@ -37,7 +52,7 @@ def send(msg_obj: MessageObj):
 
 
 def simple_relay(data):
-
+    """Forward a message unchanged to Alice or Bob based on `to_name`."""
     to_name = data.get("to_name")
 
     if to_name == ALICE:
@@ -66,7 +81,11 @@ def simple_relay(data):
 
 
 def update_body_and_relay(data):
+    """Modify the DH public value `A` in the body before relaying.
 
+    This demonstrates how a MITM can tamper with protocol messages and
+    potentially break or subvert the security guarantees.
+    """
     to_name = data.get("to_name")
 
     if to_name == ALICE:
@@ -76,6 +95,7 @@ def update_body_and_relay(data):
     else:
         raise Exception("Unknown recipient")
 
+    # Overwrite the DH public value A to simulate tampering.
     data["body"]["A"] = 99
 
     msg_obj = MessageObj(
@@ -96,6 +116,7 @@ def update_body_and_relay(data):
 
 
 def respond_dh_with_alice(data):
+    """Act as Bob toward Alice: complete DH and respond with MITM's public value."""
     global alice_dh
     stage = float(data["stage"])
     alice_dh = DiffieHellmanState()
@@ -110,6 +131,7 @@ def respond_dh_with_alice(data):
 
 
 def begin_dh_with_bob(data):
+    """Act as Alice toward Bob: start a new (weak) DH exchange with Bob."""
     global bob_dh
     stage = float(data["stage"])
     bob_dh = DiffieHellmanState()
@@ -121,6 +143,7 @@ def begin_dh_with_bob(data):
 
 
 def finish_dh_with_bob(data):
+    """Finish DH with Bob by incorporating his public value and logging the state."""
     global bob_dh
     bob_dh.set_shared_key_from_pub(data["body"]["A"])
     logger.log_dh_state(bob_dh)
@@ -128,6 +151,16 @@ def finish_dh_with_bob(data):
 
 @app.route("/receive", methods=["POST"])
 def respond():
+    """Main MITM entrypoint: inspect and route all messages.
+
+    Behaviour depends on stage:
+      - <3: transparent relay.
+      - 3–4.x: collect DH parameters and attempt a brute-force DLP attack.
+      - 5: split exchange, pretending to be Bob to Alice and Alice to Bob.
+      - 6: relay signatures.
+      - 7: tamper with DH value A before relaying.
+      - All others: default to simple relay.
+    """
     global shared_dh
     global alice_dh
     global bob_dh
@@ -139,9 +172,11 @@ def respond():
         logger.new_exchange()
     logger.log_incoming_message(data)
 
+    # Early stages: just pass traffic through.
     if stage < 3:
         return simple_relay(data)
 
+    # Stages 3–4.x: weak DH attack demo.
     elif stage < 5:
         if data["from_name"] == ALICE:
             shared_dh = DiffieHellmanState()
@@ -160,6 +195,7 @@ def respond():
                 logger.log("Timeout no secrets found")
         return simple_relay(data)
 
+    # Stage 5: MITM runs two separate exchanges, one with Alice and one with Bob.
     elif stage == 5:
         if data["from_name"] == ALICE:
             respond_dh_with_alice(data)
@@ -170,15 +206,21 @@ def respond():
             finish_dh_with_bob(data)
             return jsonify({ALICE: "Message received"})
 
+    # Stage 6: relay without tampering.
     elif stage == 6:
         return simple_relay(data)
 
+    # Stage 7: tamper with DH field A.
     elif stage == 7:
         return update_body_and_relay(data)
 
+    # Any later stage: default to pass-through behaviour.
     else:
         return simple_relay(data)
 
 
 if __name__ == "__main__":
-    app.run(port=mitm_port, debug=True)
+    debug = False
+    if not debug:
+        print("\n" * 200)
+    app.run(port=mitm_port, debug=debug)
