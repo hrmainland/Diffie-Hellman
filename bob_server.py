@@ -223,8 +223,10 @@ def handle_response(data):
         if not sig_valid:
             logger.log("\nRejecting message due to invalid signature or certificate!\n")
             return
-
-        logger.log("Certificate and signature verified")
+        if stage == 6:
+            logger.log("Signature verified")
+        else:
+            logger.log("Certificate and signature verified")
     else:
         return full_auth_dh_response(data)
 

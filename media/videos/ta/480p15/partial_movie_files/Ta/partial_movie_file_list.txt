@@ -1,3 +1,0 @@
-# This file is used internally by FFMPEG.
-file 'file:/Users/hugomainland/Documents/Monash Masters/Cryptography/Final-Assignment/media/videos/ta/480p15/partial_movie_files/Ta/1185818338_2360532569_223132457.mp4'
-file 'file:/Users/hugomainland/Documents/Monash Masters/Cryptography/Final-Assignment/media/videos/ta/480p15/partial_movie_files/Ta/624642324_2844360058_1921345015.mp4'

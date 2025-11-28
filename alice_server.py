@@ -178,11 +178,11 @@ def send_first_msg(stage):
     is_weak_dh = stage not in (4, 9)
 
     if stage == 0:
-        msg_obj = MessageObj("Morning Bob", ALICE, "Bob", bob_url, stage)
+        msg_obj = MessageObj("Morning Bob", ALICE, BOB, bob_url, stage)
         send(msg_obj)
 
     elif stage == 1:
-        msg_obj = MessageObj("What's your pin?", ALICE, "Bob", mitm_url, stage)
+        msg_obj = MessageObj("What's your pin?", ALICE, BOB, mitm_url, stage)
         send(msg_obj)
 
     # Stages 2–5 are simple DH with no signatures.
@@ -285,8 +285,9 @@ def receive_message():
     a basic acknowledgement to the sender.
     """
     data = request.json
-    logger.log_incoming_message(data)
-    handle_response(data)
+    if int(data.get("stage")) >= 0:
+        logger.log_incoming_message(data)
+        handle_response(data)
     return jsonify({ALICE: "Message received"})
 
 
