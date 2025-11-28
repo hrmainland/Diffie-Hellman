@@ -8,29 +8,6 @@ from crypto_utils import sign, simple_sign, public_key_pem_serialize
 from message import MessageObj
 import networking_utils
 
-
-def log_outgoing_message(msg_obj: MessageObj, printer):
-    """Pretty-print outgoing message contents using the provided printer."""
-
-    def preview(obj):
-        text = str(obj)
-        return text if len(text) <= 15 else text[:15] + "..."
-
-    printer(f"\n[{msg_obj.from_name}] Sending:")
-    for key, value in msg_obj.__dict__.items():
-        if isinstance(value, dict):
-            printer(key + ":")
-            for subkey, subvalue in value.items():
-                printer(f"   {subkey}: {preview(subvalue)}")
-        else:
-            if key in ("to_url", "stage", "method"):
-                continue
-            if (key == "cert" and not value) or (key == "signature" and not value):
-                continue
-            printer(f"{key}: {preview(value)}")
-    printer("*" * 40)
-
-
 def populate_rsa(is_demo=False):
     """Generate RSA key pair for signing."""
     rsa = RSAState()
@@ -68,7 +45,7 @@ def get_signature(message_bytes, rsa_state):
         raise Exception("No means to sign message - missing keys and constants")
 
 
-def request_certificate_from_ca(name, rsa_state, ca_url, stage, from_name):
+def request_certificate_from_ca(name, rsa_state, ca_url, stage, from_name, logger=None):
     """
     Request a certificate from the CA.
 
@@ -78,6 +55,7 @@ def request_certificate_from_ca(name, rsa_state, ca_url, stage, from_name):
         ca_url: The CA's URL endpoint
         stage: The current protocol stage
         from_name: The sender name for the message
+        logger: Optional logger instance for output
 
     Returns:
         dict: The certificate from the CA, or None if request failed
@@ -93,7 +71,8 @@ def request_certificate_from_ca(name, rsa_state, ca_url, stage, from_name):
     csr_sig = get_signature(csr_bytes, rsa_state)
 
     # Step 4: Send CSR to CA
-    print(f"Requesting certificate from CA for {name}")
+    if logger:
+        logger.log(f"Requesting certificate from CA for {name}")
     msg_obj = MessageObj(
         csr_fields.serializable(),
         from_name,
@@ -106,10 +85,17 @@ def request_certificate_from_ca(name, rsa_state, ca_url, stage, from_name):
     response = networking_utils.send(msg_obj)
 
     # Step 5: Check response
-    if response.status_code != 200:
-        print("Failed to request certificate from CA")
-        print(response.json())
+    if response is None:
+        if logger:
+            logger.log("Warning: CA server did not respond or timed out")
         return None
 
-    print(f"Certificate received from CA for {name}")
+    if response.status_code != 200:
+        if logger:
+            logger.log("Failed to request certificate from CA")
+            logger.log(str(response.json()))
+        return None
+
+    if logger:
+        logger.log(f"Certificate received from CA for {name}")
     return response.json()

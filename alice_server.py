@@ -12,8 +12,8 @@ from server_utils import (
     build_dh_fields,
     get_signature,
     request_certificate_from_ca,
-    log_outgoing_message,
 )
+from logger import Logger
 from ca_server import ca_public_key
 import logging
 
@@ -36,20 +36,16 @@ ca_url = config[CA]["base_url"] + "/request"
 # global variables imitating databases/persistent state on real servers
 current_dh = None
 current_rsa = None
+logger = Logger(ALICE, GREEN)
 
 
 def send(msg_obj: MessageObj):
     # Log outgoing message fields before forwarding to the networking layer.
-    log_outgoing_message(msg_obj, print)
-    return networking_utils.send(msg_obj)
-
-
-def print(*args, **kwargs):
-    def green(text):
-        return f"\033[92m{text}\033[0m"
-
-    colored = " ".join(green(str(arg)) for arg in args)
-    builtins.print(colored, **kwargs)
+    logger.log_outgoing_message(msg_obj)
+    response = networking_utils.send(msg_obj)
+    if response is None:
+        logger.log(f"Warning: {msg_obj.to_name} server did not respond or timed out")
+    return response
 
 
 def populate_dh(is_weak_dh, logging=True):
@@ -57,7 +53,7 @@ def populate_dh(is_weak_dh, logging=True):
     dh.generate_values(is_weak_dh)
     dh.generate_keys()
     if logging:
-        print(dh)
+        logger.log_dh_state(dh)
     return dh
 
 
@@ -94,22 +90,52 @@ def build_authenticated_dh_message(dh_state, rsa_state, stage, dest_url):
     return msg_obj
 
 
+def full_auth_dh(is_weak_dh=False, stage=FULL_AUTH_DH_STAGE):
+    global current_dh
+    # Step 1: Generate DH values
+    current_dh = populate_dh(is_weak_dh)
+
+    # Step 2: Generate RSA key pair and obtain certificate from CA
+    current_rsa = populate_rsa()
+    current_rsa.cert = request_certificate_from_ca(
+        name=NAME,
+        rsa_state=current_rsa,
+        ca_url=ca_url,
+        stage=stage,
+        from_name=ALICE,
+        logger=logger,
+    )
+
+    if current_rsa.cert is None:
+        logger.log("Failed to obtain certificate from CA - aborting authentication")
+        return
+
+    # Step 3: Send authenticated DH message to Bob
+    msg_obj = build_authenticated_dh_message(current_dh, current_rsa, stage, mitm_url)
+    send(msg_obj)
+
+
 def send_first_msg(stage):
     global current_dh
     global current_rsa
-    is_weak_dh = stage != 4
+
+    logger.new_exchange()
+
+    is_weak_dh = stage not in (4, 9)
 
     if stage == 0:
         msg_obj = MessageObj("Morning Bob", ALICE, "Bob", bob_url, stage)
+        send(msg_obj)
+
     elif stage == 1:
-        msg_obj = MessageObj(
-            "What's your pin number again?", ALICE, "Bob", mitm_url, stage
-        )
+        msg_obj = MessageObj("What's your pin?", ALICE, "Bob", mitm_url, stage)
+        send(msg_obj)
 
     # stages 2 -5 are simple DH
     elif 2 <= stage <= 5:
         current_dh = populate_dh(is_weak_dh)
         msg_obj = MessageObj(current_dh.public_info(), ALICE, BOB, mitm_url, stage)
+        send(msg_obj)
 
     # signature stage
     elif 6 <= stage <= 7:
@@ -129,29 +155,16 @@ def send_first_msg(stage):
 
         if VERBOSE:
             bits = "".join(f"{b:08b}" for b in message_bytes)
-            print(bits)
+            logger.log("DH message bits: " + bits)
+
+        send(msg_obj)
 
     elif stage == 8:
-        # Step 1: Generate DH values
-        current_dh = populate_dh(is_weak_dh)
+        full_auth_dh(is_weak_dh, stage)
+        return
 
-        # Step 2: Generate RSA key pair and obtain certificate from CA
-        current_rsa = populate_rsa()
-        current_rsa.cert = request_certificate_from_ca(
-            name=NAME,
-            rsa_state=current_rsa,
-            ca_url=ca_url,
-            stage=stage,
-            from_name=ALICE,
-        )
-
-        if current_rsa.cert is None:
-            raise Exception("Failed to obtain certificate from CA")
-
-        # Step 3: Send authenticated DH message to Bob
-        msg_obj = build_authenticated_dh_message(current_dh, current_rsa, stage, mitm_url)
-
-    send(msg_obj)
+    else:
+        full_auth_dh()
 
 
 def handle_response(data):
@@ -164,24 +177,28 @@ def handle_response(data):
         return
     # stages 2-5 all DH
     elif 2 <= stage < 6:
-        current_dh.set_shared_key(data["body"]["A"])
-        print(current_dh)
+        current_dh.set_shared_key_from_pub(data["body"]["A"])
+        logger.log_dh_state(current_dh)
         return
     # stages 6-7 demo signatures
     elif 6 <= stage < 8:
         return
     # stage 8.1 - Bob's response with certificate
-    elif 8 <= stage < 9:
+    else:
         # Verify Bob's signature and certificate
-        sig_valid = verify_dh_signature(data, ca_public_key)
+        sig_valid = verify_dh_signature(data, ca_public_key, expected_name=BOB)
         if not sig_valid:
-            print("Rejecting Bob's message due to invalid signature or certificate")
+            logger.log(
+                "\nRejecting Bob's message due to invalid signature or certificate!\n"
+            )
             return
 
+        logger.log("Certificate and signature verified")
+
         # If verification passes, complete DH key exchange
-        current_dh.set_shared_key(data["body"]["A"])
-        print(current_dh)
-        print("Authenticated key exchange completed successfully!")
+        current_dh.set_shared_key_from_pub(data["body"]["A"])
+        logger.log_dh_state(current_dh)
+        logger.log("\nAuthenticated key exchange completed successfully!\n")
         return
 
 
@@ -195,7 +212,7 @@ def begin():
 @app.route("/receive", methods=["POST"])
 def receive_message():
     data = request.json
-    print(ALICE, "Received:", data["body"])
+    logger.log_incoming_message(data)
     handle_response(data)
     return jsonify({ALICE: "Message received"})
 

@@ -67,8 +67,7 @@ zQIDAQAB
 
 # load the CA keys from PEM format
 ca_private_key = serialization.load_pem_private_key(
-    CA_PRIVATE_KEY_PEM.encode('utf-8'),
-    password=None
+    CA_PRIVATE_KEY_PEM.encode("utf-8"), password=None
 )
 ca_public_key = public_key_deserialize_from_pem(CA_PUBLIC_KEY_PEM)
 

@@ -74,7 +74,7 @@ class DiffieHellmanState:
     def set_B(self, B):
         self.B = B
 
-    def set_shared_key(self, recived_A):
+    def set_shared_key_from_pub(self, recived_A):
         self.B = recived_A
         self.K = pow(recived_A, self.x, self.p)
 

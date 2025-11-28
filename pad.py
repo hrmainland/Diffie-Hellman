@@ -1,7 +1,7 @@
-from crypto_utils import *
+from logger import Logger
 
-print(get_rsa_constants().private_numbers().d)
-print()
-print(get_rsa_constants().public_key().public_numbers().n)
-print()
-print(get_rsa_constants().public_key().public_numbers().e)
+
+logger = Logger("red")
+
+
+logger.log("Hello" + "there")

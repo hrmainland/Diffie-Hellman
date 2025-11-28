@@ -5,6 +5,7 @@ from message import MessageObj
 from constants import *
 from diffie_hellman_utils import *
 from state_objects import *
+from logger import Logger
 import builtins
 import time
 import logging
@@ -24,18 +25,15 @@ shared_dh = None
 alice_dh = None
 bob_dh = None
 
+logger = Logger(MITM, RED)
+
 
 def send(msg_obj: MessageObj):
-    print(f"[MITM] Sending:", msg_obj.body)
-    return networking_utils.send(msg_obj)
-
-
-def print(*args, **kwargs):
-    def red(body):
-        return f"\033[91m{body}\033[0m"
-
-    colored = " ".join(red(str(arg)) for arg in args)
-    builtins.print(colored, **kwargs)
+    logger.log_outgoing_message(msg_obj)
+    response = networking_utils.send(msg_obj)
+    if response is None:
+        logger.log(f"Warning: {msg_obj.to_name} server did not respond or timed out")
+    return response
 
 
 def simple_relay(data):
@@ -60,6 +58,9 @@ def simple_relay(data):
     )
 
     downstream_resp = send(msg_obj)
+
+    if downstream_resp is None:
+        return jsonify({MITM: "Downstream server did not respond"})
 
     return downstream_resp.json()
 
@@ -88,17 +89,20 @@ def update_body_and_relay(data):
 
     downstream_resp = send(msg_obj)
 
+    if downstream_resp is None:
+        return jsonify({MITM: "Downstream server did not respond"})
+
     return downstream_resp.json()
 
 
 def respond_dh_with_alice(data):
     global alice_dh
-    stage = int(data["stage"])
+    stage = float(data["stage"])
     alice_dh = DiffieHellmanState()
     alice_dh.set_values(data["body"]["p"], data["body"]["g"])
     alice_dh.generate_keys()
-    alice_dh.set_shared_key(data["body"]["A"])
-    print(alice_dh)
+    alice_dh.set_shared_key_from_pub(data["body"]["A"])
+    logger.log_dh_state(alice_dh)
     msg_obj = MessageObj(
         alice_dh.public_info(), BOB, ALICE, alice_receive_url, stage + 0.1
     )
@@ -107,30 +111,33 @@ def respond_dh_with_alice(data):
 
 def begin_dh_with_bob(data):
     global bob_dh
-    stage = int(data["stage"])
+    stage = float(data["stage"])
     bob_dh = DiffieHellmanState()
     bob_dh.generate_values(is_weak=True)
     bob_dh.generate_keys()
-    print(bob_dh)
+    logger.log_dh_state(bob_dh)
     msg_obj = MessageObj(bob_dh.public_info(), ALICE, BOB, bob_receive_url, stage + 0.1)
     send(msg_obj)
 
 
 def finish_dh_with_bob(data):
     global bob_dh
-    bob_dh.set_shared_key(data["body"]["A"])
-    print(bob_dh)
+    bob_dh.set_shared_key_from_pub(data["body"]["A"])
+    logger.log_dh_state(bob_dh)
 
 
 @app.route("/receive", methods=["POST"])
-def relay():
+def respond():
     global shared_dh
     global alice_dh
     global bob_dh
 
     data = request.json
-    stage = int(data["stage"])
-    print("[MITM] Incoming:", data["body"])
+    stage = float(data["stage"])
+
+    if data["from_name"] == ALICE:
+        logger.new_exchange()
+    logger.log_incoming_message(data)
 
     if stage < 3:
         return simple_relay(data)
@@ -142,15 +149,15 @@ def relay():
             shared_dh.set_A(data["body"]["A"])
         else:
             shared_dh.set_B(data["body"]["A"])
-            print("Generating...")
+            logger.log("Generating...")
             secrets = brute_force_dlp(
                 shared_dh.g, shared_dh.p, shared_dh.A, shared_dh.B
             )
             if secrets:
                 shared_dh.generate_shared_key_from_secrets(secrets[0], secrets[1])
-                print("The shared key is:", shared_dh.K)
+                logger.log(f"The shared key is: {shared_dh.K}")
             else:
-                print("Timeout no secrets found")
+                logger.log("Timeout no secrets found")
         return simple_relay(data)
 
     elif stage == 5:
@@ -169,7 +176,7 @@ def relay():
     elif stage == 7:
         return update_body_and_relay(data)
 
-    elif 8 <= stage < 9:
+    else:
         return simple_relay(data)
 
 

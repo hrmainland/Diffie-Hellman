@@ -151,7 +151,9 @@ def verify_certificate(cert, ca_public_key):
         return (False, None)
 
 
-def verify_dh_signature(data, ca_public_key, is_demo=False, logging=True):
+def verify_dh_signature(
+    data, ca_public_key, is_demo=False, logging=False, expected_name=None
+):
     """
     Verify a DH message signature, with optional certificate verification.
 
@@ -181,6 +183,7 @@ def verify_dh_signature(data, ca_public_key, is_demo=False, logging=True):
     if is_demo:
         # Demo mode: use simple verification with hardcoded keys
         from constants import DEMO_E, DEMO_N
+
         result = simple_verify(message_bytes, sig, DEMO_E, DEMO_N)
     else:
         # Stage 8+: Verify certificate first, then verify DH signature
@@ -198,16 +201,25 @@ def verify_dh_signature(data, ca_public_key, is_demo=False, logging=True):
                 print("Certificate verification failed")
             return False
 
+        # Bind identity: cert must match expected peer and message body.
+        cert_name = cert["body"].get("name")
+        body_name = data["body"].get("name")
+        if expected_name and cert_name != expected_name:
+            if logging:
+                print(f"Certificate name mismatch: expected {expected_name}, got {cert_name}")
+            return False
+        if body_name and cert_name != body_name:
+            if logging:
+                print(f"Certificate/name mismatch between cert ({cert_name}) and body ({body_name})")
+            return False
+
         if logging:
             print(f"Certificate verified for: {cert['body']['name']}")
 
         # Verify the DH message signature using the public key from the cert
         result = verify(message_bytes, sig, sender_public_key)
 
-    if logging:
-        if result:
-            print("DH signature is valid")
-        else:
-            print("DH signature is invalid, rejecting packet")
+        if logging and result:
+            print("DH signature verified")
 
     return result
